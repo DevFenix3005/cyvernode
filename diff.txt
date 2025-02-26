@@ -1,0 +1,487 @@
+diff --git a/Constants.h b/Constants.h
+index efbcbfb..2925778 100644
+--- a/Constants.h
++++ b/Constants.h
+@@ -1,8 +1,10 @@
+-#define BLUE_LED 2
++#define WATER_PUMP_PIN 2
+ #define INFO_LED 13
+ #define ON "ON"
+ #define OFF "OFF"
+ #define SWAP "SWAP"
++#define CELSIUS "CELSIUS"
++#define FAHRENHEIT "FAHRENHEIT"
+ 
+ #define TRIGGER_BUTTON 7
+ #define DURATION 2000
+@@ -16,5 +18,20 @@
+ 
+ #define POW_SOIL_MOISTURE_PIN 5
+ #define SOIL_MOISTURE_PIN A0
+-#define DRY 3000 // Valor aproximado del sensor cuando el suelo está seco
+-#define WET 1000 // Valor aproximado del sensor cuando el suelo está muy húmedo
+\ No newline at end of file
++
++#define POW_PHOTORES_PIN 0
++#define PHOTORES_PIN A1
++
++#define POW_WATER_LVL_PIN 8
++#define WATER_LVL_PIN A2
++
++#define TEMP_MIN 15            // Temperatura mínima para permitir riego
++#define TEMP_MAX 35            // Temperatura máxima para permitir riego
++#define HUMIDITY_THRESHOLD 40  // Humedad ambiental baja
++#define LIGHT_THRESHOLD 90     // Nivel de luz para evitar regar en pleno sol
++#define DRY_THRESHOLD 60       // Porcentaje de humedad del suelo mínimo antes de regar
++
++#define MEASURE_TIMES 5
++
++#define TIME_TO_WATERING 60000
++//#define TIME_TO_WATERING 10000
+\ No newline at end of file
+diff --git a/MyWebServerWrapper.hpp b/MyWebServerWrapper.hpp
+deleted file mode 100644
+index ac777a6..0000000
+--- a/MyWebServerWrapper.hpp
++++ /dev/null
+@@ -1,205 +0,0 @@
+-#ifndef MYWEBSERVERWRAPPER_HPP
+-#define MYWEBSERVERWRAPPER_HPP
+-
+-#include <Arduino.h>
+-#include <ESPAsyncWebServer.h>
+-#include <AsyncJson.h>
+-#include <ArduinoJson.h>
+-#include <functional>
+-#include <memory>  // Para std::unique_ptr
+-#include <DHT.h>
+-#include "Constants.h"
+-#include "PayloadWrap.hpp"
+-
+-class MyWebServerWrapper {
+-public:
+-  MyWebServerWrapper(uint16_t serverPort)
+-    : port(serverPort), server(new AsyncWebServer(serverPort)), dhtSensor(new DHT(DHTPIN, DHTTYPE)) {
+-  }
+-
+-  ~MyWebServerWrapper() = default;
+-
+-  void begin() {
+-    setupRoutes();
+-    dhtSensor->begin();
+-    server->begin();
+-    Serial.println("Init webserver, port:" + String(port));
+-  }
+-
+-  void end() {
+-    server->end();
+-    server.reset();  // Libera automáticamente el recurso
+-    dhtSensor.reset();
+-    Serial.println("Webserver ended...");
+-  }
+-
+-  void restart() {
+-    Serial.println("Restarting webserver...");
+-    server.reset(new AsyncWebServer(port));  // Crea una nueva instancia
+-    dhtSensor.reset(new DHT(DHTPIN, DHTTYPE));
+-    begin();
+-  }
+-
+-  void handleRoot(AsyncWebServerRequest *request) {
+-    digitalWrite(INFO_LED, HIGH);
+-    delay(2);
+-    AsyncJsonResponse *response = new AsyncJsonResponse();
+-    JsonObject root = response->getRoot();
+-    root["message"] = "Hello from ESP32!";
+-    response->setLength();
+-    response->setContentType("application/json");
+-    digitalWrite(INFO_LED, LOW);
+-    request->send(response);
+-  }
+-
+-  void handleLed(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+-    PayloadWrap *payloadWrap = generatePayload(data, len);
+-    DeserializationError error = payloadWrap->getDeserializationError();
+-
+-    AsyncJsonResponse *response = new AsyncJsonResponse();
+-    JsonObject root = response->getRoot();
+-
+-    if (error) {
+-      root["message"] = "Invalid JSON format!";
+-      root["cause"] = error.c_str();
+-      response->setCode(400);
+-    } else {
+-      auto payload = payloadWrap->getJsonDocument();
+-      if (payload->containsKey("status")) {
+-        String status = (*payload)["status"];
+-        if (status == SWAP) {
+-          status = digitalRead(BLUE_LED) ? OFF : ON;
+-        }
+-        if (status == ON) {
+-          ledTurnOn(root);
+-        } else if (status == OFF) {
+-          ledTurnOff(root);
+-        } else {
+-          root["message"] = "Invalid status! Use 'ON' or 'OFF' or 'SWAP'.";
+-          response->setCode(400);
+-        }
+-      } else {
+-        root["message"] = "Missing 'status' key in JSON.";
+-        response->setCode(400);
+-      }
+-    }
+-    response->setLength();
+-    response->setContentType("application/json");
+-    request->send(response);
+-    delete payloadWrap;
+-  }
+-
+-  void handleDht(AsyncWebServerRequest *request) {
+-    digitalWrite(INFO_LED, HIGH);
+-    turnOnSensor();
+-    delay(500);
+-
+-    // Reading temperature or humidity takes about 250 milliseconds!
+-    // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
+-    float humidity = dhtSensor->readHumidity();
+-    // Read temperature as Celsius (the default)
+-    float celsius = dhtSensor->readTemperature();
+-    // Read temperature as Fahrenheit (isFahrenheit = true)
+-    float fahrenheit = dhtSensor->readTemperature(true);
+-
+-    AsyncJsonResponse *response = new AsyncJsonResponse();
+-    JsonObject root = response->getRoot();
+-
+-    // Check if any reads failed and exit early (to try again).
+-    if (isnan(humidity) || isnan(celsius) || isnan(fahrenheit)) {
+-      root["error"] = "Failed to read from DHT sensor!";
+-      response->setCode(500);
+-    } else {
+-      root["soil"] = readSoilMoisture();
+-      root["humidity"] = humidity;
+-      root["celsius"] = celsius;
+-      root["fahrenheit"] = fahrenheit;
+-      // Compute heat index in Celsius (isFahreheit = false)
+-      root["heat_index_celsius"] = dhtSensor->computeHeatIndex(celsius, humidity, false);
+-      // Compute heat index in Fahrenheit (the default)
+-      root["heat_index_fahrenheit"] = dhtSensor->computeHeatIndex(fahrenheit, humidity);
+-    }
+-    response->setLength();
+-    response->setContentType("application/json");
+-    digitalWrite(INFO_LED, LOW);
+-    turnOffSensor();
+-    request->send(response);
+-  }
+-
+-  void handleNotFound(AsyncWebServerRequest *request) {
+-    digitalWrite(INFO_LED, HIGH);
+-    AsyncJsonResponse *response = new AsyncJsonResponse();
+-    JsonObject root = response->getRoot();
+-    response->setCode(400);
+-    root["message"] = "Path not found";
+-    root["url"] = request->url();
+-    root["method"] = request->methodToString();
+-
+-    JsonDocument jsonArgs;
+-    for (uint8_t i = 0; i < request->args(); i++) {
+-      jsonArgs[request->argName(i)] = request->arg(i);
+-    }
+-    root["args"] = jsonArgs;
+-    digitalWrite(INFO_LED, LOW);
+-    response->setLength();
+-    response->setContentType("application/json");
+-    request->send(response);
+-  }
+-
+-private:
+-  std::unique_ptr<AsyncWebServer> server;
+-  std::unique_ptr<DHT> dhtSensor;
+-  uint16_t port;
+-
+-  void setupRoutes() {
+-    server->on("/", HTTP_GET, std::bind(&MyWebServerWrapper::handleRoot, this, std::placeholders::_1));
+-    server->on("/measurement", HTTP_GET, std::bind(&MyWebServerWrapper::handleDht, this, std::placeholders::_1));
+-    server->on(
+-      "/led", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+-      std::bind(&MyWebServerWrapper::handleLed, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
+-    server->onNotFound(std::bind(&MyWebServerWrapper::handleNotFound, this, std::placeholders::_1));
+-  }
+-
+-  PayloadWrap *generatePayload(uint8_t *data, size_t len) {
+-    // Convierte el array de datos en un String
+-    String body = String((char *)data).substring(0, len);
+-    Serial.println("Datos recibidos: " + body);
+-
+-    // Crea un DynamicJsonDocument con un tamaño adecuado
+-    JsonDocument payload;  // Ajusta el tamaño según tus necesidades
+-
+-    // Intenta deserializar el JSON
+-    DeserializationError error = deserializeJson(payload, body);
+-
+-    // Crea un PayloadWrap directamente y lo retorna
+-    return new PayloadWrap(std::make_shared<JsonDocument>(payload), error);
+-  }
+-
+-  void ledTurnOn(JsonObject root) {
+-    digitalWrite(BLUE_LED, HIGH);  // Encender LED
+-    root["message"] = "Datos procesados correctamente, Led encendido";
+-  }
+-
+-  void ledTurnOff(JsonObject root) {
+-    digitalWrite(BLUE_LED, LOW);  // Apagar LED
+-    root["message"] = "Datos procesados correctamente, Led apagado";
+-  }
+-
+-  int readSoilMoisture() {
+-    int measure = analogRead(SOIL_MOISTURE_PIN);  // Read the analog value from sensor
+-    int percentMeasure = map(measure, DRY, WET, 0, 100);
+-    return constrain(percentMeasure, 0, 100);
+-  }
+-
+-  void turnOnSensor() {
+-    digitalWrite(POW_DHTPIN, HIGH);
+-    digitalWrite(POW_SOIL_MOISTURE_PIN, HIGH);
+-  }
+-
+-  void turnOffSensor() {
+-    digitalWrite(POW_DHTPIN, LOW);
+-    digitalWrite(POW_SOIL_MOISTURE_PIN, LOW);
+-  }
+-};
+-
+-#endif
+diff --git a/cyberplanta2.ino b/cyberplanta2.ino
+index bdaa3aa..ab2faa1 100644
+--- a/cyberplanta2.ino
++++ b/cyberplanta2.ino
+@@ -1,59 +1,21 @@
++#include <unordered_map>
+ #include <EasyButton.h>
+ #include <WiFiManager.h>
+ #include <ESPmDNS.h>
+-#include "MyWebServerWrapper.hpp"
++#include <TaskScheduler.h>
++#include "SensorManager.hpp"
++#include "MyWebServerWrapper.h"
+ #include "Constants.h"
+ 
+-WiFiManager wm;  // global wm instance
+-MyWebServerWrapper myWebServerWrapper(SERVER_PORT);
+-EasyButton ledButton(TRIGGER_BUTTON);
++void wateringThePlants();
++// Scheduled task
++Task wateringTask(TIME_TO_WATERING, TASK_FOREVER, &wateringThePlants);
+ 
+-void configLeds() {
+-  pinMode(INFO_LED, OUTPUT);
+-  pinMode(BLUE_LED, OUTPUT);
+-  pinMode(POW_DHTPIN, OUTPUT);
+-  pinMode(POW_SOIL_MOISTURE_PIN, OUTPUT);
+-
+-  digitalWrite(INFO_LED, LOW);
+-  digitalWrite(BLUE_LED, LOW);
+-  digitalWrite(POW_DHTPIN, LOW);
+-  digitalWrite(POW_SOIL_MOISTURE_PIN, LOW);
+-}
+-
+-void setup() {
+-  // put your setup code here, to run once:
+-  configLeds();
+-  WiFi.mode(WIFI_STA);  // explicitly set mode, esp defaults to STA+AP
+-  Serial.begin(115200);
+-  Serial.setDebugOutput(true);
+-  digitalWrite(BLUE_LED, HIGH);
+-  delay(3000);
+-  digitalWrite(BLUE_LED, LOW);
+-  Serial.println("\n Starting");
+-
+-  ledButton.begin();
+-  ledButton.onPressed(handleOnPressed);
+-  ledButton.onPressedFor(DURATION, handleOnPressedWithDuration);
+-
+-  std::vector<const char *> menu = { "wifi", "info", "param", "sep", "restart", "exit" };
+-  wm.setMenu(menu);
+-
+-  // set dark theme
+-  wm.setClass("invert");
+-  wm.setConfigPortalTimeout(30);
+-
+-  if (!wm.autoConnect("AutoConnectAP", "password")) {
+-    Serial.println("Failed to connect or hit timeout");
+-    // ESP.restart();
+-  } else {
+-    //if you get here you have connected to the WiFi
+-    Serial.println("connected...yeey :)");
+-    if (MDNS.begin(DNS_HOST)) {
+-      Serial.println("Inicinado en la direccion http:\\\\" + String(DNS_HOST));
+-    }
+-    myWebServerWrapper.begin();
+-  }
+-}
++WiFiManager wm;
++Scheduler scheduler;
++SensorManager sensorManager;
++EasyButton wifiConfigurationButton(TRIGGER_BUTTON);
++MyWebServerWrapper myWebServerWrapper(SERVER_PORT, sensorManager);
+ 
+ void handleOnPressed() {
+   // start portal w delay
+@@ -83,8 +45,157 @@ void handleOnPressedWithDuration() {
+   ESP.restart();
+ }
+ 
++void wateringThePlants() {
++  sensorManager.turnOnAllSensors();
++  SensorWrapper* waterLvlSensor = sensorManager.getSensor("waterLvl");
++  if (!waterLvlSensor) return;
++
++  int waterLvl = waterLvlSensor->readSensor();
++  if (waterLvl <= 10) {
++    sensorManager.turnOffAllSensors();
++    Serial.print("Nivel del agua muy bajo");
++    return;
++  }
++
++  Serial.print("Regando: ");
++  delay(500);
++  float temp = sensorManager.readAverageTemperature(CELSIUS);
++  float humidity = sensorManager.readAverageHumidity();
++  int light = sensorManager.readPhotoResistor();
++  int soilMoisturePercentage = sensorManager.readSoilMoisture();
++  sensorManager.turnOffAllSensors();
++
++  // 📌 Imprimir valores en la consola serie
++  Serial.println("📊 Datos de los sensores:");
++  Serial.print("🌡️ Temp: ");
++  Serial.print(temp);
++  Serial.println("°C");
++  Serial.print("💧 Humedad: ");
++  Serial.print(humidity);
++  Serial.println("%");
++  Serial.print("☀️ Luz: ");
++  Serial.print(light);
++  Serial.println("%");
++  Serial.print("🌱 Humedad del suelo: ");
++  Serial.print(soilMoisturePercentage);
++  Serial.println("%");
++
++  // 📌 Evaluación de riego (sin activar la bomba)
++  Serial.print("🔎 Evaluación de riego: ");
++  if (soilMoisturePercentage < DRY_THRESHOLD) {                                     // Suelo seco
++    if ((temp >= TEMP_MIN && temp <= TEMP_MAX) || humidity < HUMIDITY_THRESHOLD) {  // Rango de temperatura válido o baja humedad del aire
++      if (light < LIGHT_THRESHOLD) {                                                // Evitar regar en pleno sol
++        Serial.println("💧 Se recomienda regar.");
++        waterPlantUntilOptimal();
++      } else {
++        Serial.println("⛔ Demasiada luz solar. No se recomienda regar. Mover la planta si es necesario");
++      }
++    } else {
++      Serial.println("⛔ Temperatura fuera del rango adecuado. No se recomienda regar.");
++    }
++  } else {
++    Serial.println("🌱 Suelo aún húmedo. No se necesita riego.");
++  }
++  sensorManager.turnOffAllSensors();
++  Serial.println("------------------------------------------------");
++}
++
++void waterPlantUntilOptimal() {
++  Serial.println("🚰 Iniciando riego automático...");
++  SensorWrapper* sensor = sensorManager.getSensor("soil");
++  if (sensor) {
++    sensor->turnOnSensor();
++    // Encender la bomba de agua
++    digitalWrite(WATER_PUMP_PIN, HIGH);
++
++    while (true) {
++      // Leer la humedad del suelo en porcentaje
++      int soilMoisturePercentage = sensor->readSensor();
++
++      Serial.print("💧 Humedad actual del suelo: ");
++      Serial.print(soilMoisturePercentage);
++      Serial.println("%");
++
++      // Si la humedad del suelo supera el 85%, detenemos el riego
++      if (soilMoisturePercentage >= 85) {
++        Serial.println("✅ Humedad óptima alcanzada. Deteniendo riego.");
++        break;
++      }
++
++      delay(1000);  // Esperamos 1 segundo antes de volver a medir
++    }
++
++    // Apagar la bomba de agua
++    sensor->turnOffSensor();
++    digitalWrite(WATER_PUMP_PIN, LOW);
++    Serial.println("🚰 Riego completado. Volviendo a la operación normal.");
++  }
++}
++
++void configureWifiButton() {
++  wifiConfigurationButton.begin();
++  wifiConfigurationButton.onPressed(handleOnPressed);
++  wifiConfigurationButton.onPressedFor(DURATION, handleOnPressedWithDuration);
++}
++
++void configScheduler() {
++  scheduler.init();
++  Serial.println("Initialized scheduler");
++
++  scheduler.addTask(wateringTask);
++  Serial.println("added wateringTask");
++  delay(5000);
++
++  wateringTask.enable();
++  Serial.println("Enabled t1");
++}
++
++void configSensores() {
++  pinMode(WATER_PUMP_PIN, OUTPUT);
++  digitalWrite(WATER_PUMP_PIN, LOW);
++
++  sensorManager.beginAll();
++  sensorManager.turnOnAllSensors();
++  digitalWrite(WATER_PUMP_PIN, HIGH);
++
++  delay(3000);
++  sensorManager.turnOffAllSensors();
++  digitalWrite(WATER_PUMP_PIN, LOW);
++}
++
++void setup() {
++  // put your setup code here, to run once:
++  Serial.begin(115200);
++  Serial.setDebugOutput(true);
++  Serial.println("\n Starting");
++  configSensores();
++  WiFi.mode(WIFI_STA);  // explicitly set mode, esp defaults to STA+AP
++
++  std::vector<const char*> menu = { "wifi", "info", "param", "sep", "restart", "exit" };
++  wm.setMenu(menu);
++
++  // set dark theme
++  wm.setClass("invert");
++  wm.setConfigPortalTimeout(30);
++
++  if (!wm.autoConnect("AutoConnectAP", "password")) {
++    Serial.println("Failed to connect or hit timeout");
++    // ESP.restart();
++  } else {
++    //if you get here you have connected to the WiFi
++    Serial.println("connected...yeey :)");
++    if (MDNS.begin(DNS_HOST)) {
++      Serial.println("Inicinado en la direccion http:\\\\" + String(DNS_HOST));
++    }
++    configScheduler();
++    configureWifiButton();
++    myWebServerWrapper.begin();
++  }
++}
++
+ 
+ void loop() {
+   // put your main code here, to run repeatedly:
+-  ledButton.read();
++  scheduler.execute();
++  wifiConfigurationButton.read();
+ }
