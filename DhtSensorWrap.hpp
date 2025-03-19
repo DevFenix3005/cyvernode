@@ -11,6 +11,7 @@ public:
     : SensorWrapper(powerPin, sensorPin), dht(sensorPin, dhtType) {}
 
   void begin() override {
+    SensorWrapper::begin();
     dht.begin();
   }
 

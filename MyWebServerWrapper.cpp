@@ -41,6 +41,43 @@ void MyWebServerWrapper::handleRoot(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+void MyWebServerWrapper::handleWaterPump(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+  digitalWrite(INFO_LED, HIGH);
+  delay(333);
+  auto payloadWrap = generatePayload(data, len);
+  auto response = new AsyncJsonResponse();
+  JsonObject root = response->getRoot();
+
+  if (payloadWrap->getDeserializationError()) {
+    root["error"] = "❌ Formato JSON inválido.";
+    root["cause"] = payloadWrap->getDeserializationError().c_str();
+    response->setCode(400);
+  } else {
+    auto payload = payloadWrap->getJsonDocument();
+    if (payload->containsKey("status")) {
+      String status = (*payload)["status"];
+      if (status == SWAP) {
+        status = digitalRead(WATER_PUMP_PIN) ? OFF : ON;
+      }
+      if (status == ON) {
+        ledTurnOn(root);
+      } else if (status == OFF) {
+        ledTurnOff(root);
+      } else {
+        root["message"] = "Invalid status! Use 'ON' or 'OFF' or 'SWAP'.";
+        response->setCode(400);
+      }
+    } else {
+      root["message"] = "Missing 'status' key in JSON.";
+      response->setCode(400);
+    }
+  }
+  response->setLength();
+  response->setContentType("application/json");
+  digitalWrite(INFO_LED, LOW);
+  request->send(response);
+}
+
 void MyWebServerWrapper::handleMeasurement(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
   digitalWrite(INFO_LED, HIGH);
   sensorManager.turnOnAllSensors();  // 🔥 Encender sensores antes de medir
@@ -116,7 +153,20 @@ void MyWebServerWrapper::setupRoutes() {
   server->on(
     "/measurement", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
     std::bind(&MyWebServerWrapper::handleMeasurement, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
+  server->on(
+    "/pump", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+    std::bind(&MyWebServerWrapper::handleWaterPump, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
   server->onNotFound(std::bind(&MyWebServerWrapper::handleNotFound, this, std::placeholders::_1));
+}
+
+void MyWebServerWrapper::ledTurnOn(JsonObject root) {
+  digitalWrite(WATER_PUMP_PIN, HIGH);  // Encender LED
+  root["message"] = "Datos procesados correctamente, Led encendido";
+}
+
+void MyWebServerWrapper::ledTurnOff(JsonObject root) {
+  digitalWrite(WATER_PUMP_PIN, LOW);  // Apagar LED
+  root["message"] = "Datos procesados correctamente, Led apagado";
 }
 
 std::unique_ptr<PayloadWrap> MyWebServerWrapper::generatePayload(uint8_t *data, size_t len) {

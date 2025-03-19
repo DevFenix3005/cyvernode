@@ -1,4 +1,5 @@
 #define WATER_PUMP_PIN 2
+
 #define INFO_LED 13
 #define ON "ON"
 #define OFF "OFF"
@@ -8,6 +9,7 @@
 
 #define TRIGGER_BUTTON 7
 #define DURATION 2000
+#define DURATION_FOR_RESTART 8000
 
 #define SERVER_PORT 8080
 #define DNS_HOST "cyverplant"
@@ -33,5 +35,5 @@
 
 #define MEASURE_TIMES 5
 
-#define TIME_TO_WATERING 60000
+#define TIME_TO_WATERING 10
 //#define TIME_TO_WATERING 10000

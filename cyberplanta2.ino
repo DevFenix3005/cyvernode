@@ -7,18 +7,19 @@
 #include "MyWebServerWrapper.h"
 #include "Constants.h"
 
-void wateringThePlants();
-// Scheduled task
-Task wateringTask(TIME_TO_WATERING, TASK_FOREVER, &wateringThePlants);
-
 WiFiManager wm;
 Scheduler scheduler;
 SensorManager sensorManager;
 EasyButton wifiConfigurationButton(TRIGGER_BUTTON);
 MyWebServerWrapper myWebServerWrapper(SERVER_PORT, sensorManager);
 
+
+/* Scheduled task */
+void wateringThePlants();
+Task wateringTask(TASK_MINUTE * TIME_TO_WATERING, TASK_FOREVER, &wateringThePlants, &scheduler, true);
+
+
 void handleOnPressed() {
-  // start portal w delay
   Serial.println("Starting config portal");
   myWebServerWrapper.end();
   MDNS.end();
@@ -41,8 +42,8 @@ void handleOnPressed() {
 void handleOnPressedWithDuration() {
   Serial.println("Button Held");
   Serial.println("Erasing Config, restarting");
-  wm.resetSettings();
-  ESP.restart();
+  //wm.resetSettings();
+  //ESP.restart();
 }
 
 void wateringThePlants() {
@@ -58,7 +59,7 @@ void wateringThePlants() {
   }
 
   Serial.print("Regando: ");
-  delay(500);
+  delay(1500);
   float temp = sensorManager.readAverageTemperature(CELSIUS);
   float humidity = sensorManager.readAverageHumidity();
   int light = sensorManager.readPhotoResistor();
@@ -132,43 +133,42 @@ void waterPlantUntilOptimal() {
   }
 }
 
-void configureWifiButton() {
-  wifiConfigurationButton.begin();
-  wifiConfigurationButton.onPressed(handleOnPressed);
-  wifiConfigurationButton.onPressedFor(DURATION, handleOnPressedWithDuration);
-}
-
-void configScheduler() {
-  scheduler.init();
-  Serial.println("Initialized scheduler");
-
-  scheduler.addTask(wateringTask);
-  Serial.println("added wateringTask");
-  delay(5000);
-
-  wateringTask.enable();
-  Serial.println("Enabled t1");
-}
 
 void configSensores() {
+
+  delay(333);
   pinMode(WATER_PUMP_PIN, OUTPUT);
   digitalWrite(WATER_PUMP_PIN, LOW);
 
   sensorManager.beginAll();
   sensorManager.turnOnAllSensors();
-  digitalWrite(WATER_PUMP_PIN, HIGH);
 
   delay(3000);
   sensorManager.turnOffAllSensors();
-  digitalWrite(WATER_PUMP_PIN, LOW);
+}
+
+
+void configScheduler() {
+  delay(333);
+  scheduler.init();
+  Serial.println("Initialized scheduler");
+  wateringTask.enable();
+  Serial.println("Enabled t1");
+}
+
+
+void configureWifiButton() {
+  delay(333);
+  wifiConfigurationButton.begin();
+  wifiConfigurationButton.onPressedFor(DURATION, handleOnPressed);
+  wifiConfigurationButton.onPressedFor(DURATION_FOR_RESTART, handleOnPressedWithDuration);
 }
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.println("\n Starting");
-  configSensores();
+  Serial.println("Starting");
   WiFi.mode(WIFI_STA);  // explicitly set mode, esp defaults to STA+AP
 
   std::vector<const char*> menu = { "wifi", "info", "param", "sep", "restart", "exit" };
@@ -187,6 +187,7 @@ void setup() {
     if (MDNS.begin(DNS_HOST)) {
       Serial.println("Inicinado en la direccion http:\\\\" + String(DNS_HOST));
     }
+    configSensores();
     configScheduler();
     configureWifiButton();
     myWebServerWrapper.begin();

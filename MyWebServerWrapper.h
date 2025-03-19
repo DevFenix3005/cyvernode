@@ -30,6 +30,8 @@ private:
   uint16_t port;
 
   void setupRoutes();
+  void ledTurnOn(JsonObject root);
+  void ledTurnOff(JsonObject root);
   std::unique_ptr<PayloadWrap> generatePayload(uint8_t *data, size_t len);
 };
 

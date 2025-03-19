@@ -26,6 +26,7 @@ public:
 
   void beginAll() {
     for (auto &sensor : sensors) {
+      Serial.println("Iniciando " + String(sensor.first));
       sensor.second->begin();
     }
   }
